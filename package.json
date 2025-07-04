@@ -1,0 +1,49 @@
+{
+  "name": "supabase-task-and-chat-app",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "A task and chat application built with TypeScript, Tailwind CSS, and Supabase",
+  "main": "index.js",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
+    "type-check": "tsc --noEmit"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/henrii1/Supabase-Task-and-Chat-App.git"
+  },
+  "keywords": [
+    "react",
+    "typescript",
+    "tailwindcss",
+    "supabase",
+    "vite"
+  ],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/henrii1/Supabase-Task-and-Chat-App/issues"
+  },
+  "homepage": "https://github.com/henrii1/Supabase-Task-and-Chat-App#readme",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.48.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.1.11",
+    "@types/node": "^22.10.7",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^4.3.4",
+    "autoprefixer": "^10.4.21",
+    "postcss": "^8.5.6",
+    "tailwindcss": "^4.1.11",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.5"
+  }
+}

@@ -1,0 +1,296 @@
+---
+description:
+
+# Task Manager + Team Chat App Specification
+
+_Last updated: July 4, 2025_
+
+This document is the **source-of-truth** blueprint for building the Task Manager + Team Chat application using **TypeScript**, **React (with Tailwind CSS)**, and **Supabase**. It is structured to guide both human developers and automated tooling (e.g., Cursor AI) through every required step, detail, and convention.
+
+---
+
+## Table of Contents
+
+1. [Project Overview](#project-overview)
+2. [Database Schema](#database-schema)
+   - 2.1 [users](#users)
+   - 2.2 [teams](#teams)
+   - 2.3 [team_members](#team_members)
+   - 2.4 [tasks](#tasks)
+   - 2.5 [messages](#messages)
+   - 2.6 [Row-Level Security (RLS) Policies](#row-level-security-rls-policies)
+3. [System Architecture](#system-architecture)
+   - 3.1 [Authentication Flow](#authentication-flow)
+   - 3.2 [CRUD & Realtime Flow](#crud--realtime-flow)
+4. [Directory & Component Structure](#directory--component-structure)
+5. [OAuth & Supabase Configuration](#oauth--supabase-configuration)
+6. [Coding Conventions & Cursor Rules](#coding-conventions--cursor-rules)
+7. [Deployment & Environment Configuration](#deployment--environment-configuration)
+8. [Additional Best Practices](#additional-best-practices)
+
+---
+
+## Project Overview
+
+We are building a **Team Task Board** that combines:
+
+- **Task Management**: Create, read, update, and delete tasks, each assigned to team members.
+- **Team Chat**: Real-time messaging for collaboration within teams.
+- **Authentication**: Email/password and **Google OAuth** sign-in.
+- **Realtime Updates**: Powered by Supabase Realtime (WebSockets).
+
+The application will be implemented with:
+
+- **Frontend**: React + TypeScript + Tailwind CSS
+- **Backend**: Supabase (Auth, Postgres, Realtime)
+
+---
+
+## Database Schema
+
+All tables reside in a single `public` PostgreSQL schema managed by Supabase. Use `gen_random_uuid()` for primary keys.
+
+### users
+
+```sql
+CREATE TABLE public.users (
+  id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  email            TEXT UNIQUE NOT NULL,        -- User login email
+  name             TEXT,                        -- Display name
+  oauth_provider   TEXT,                        -- 'google' or NULL
+  oauth_id         TEXT,                        -- Provider user ID
+  created_at       TIMESTAMP WITH TIME ZONE DEFAULT now()
+);
+
+### Teams
+CREATE TABLE public.teams (
+  id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name       TEXT NOT NULL,                     -- Team name (e.g. 'Design Team')
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT now()
+);
+
+### Team_Members
+CREATE TABLE public.team_members (
+  team_id   UUID REFERENCES public.teams(id) ON DELETE CASCADE,
+  user_id   UUID REFERENCES public.users(id) ON DELETE CASCADE,
+  role       TEXT NOT NULL                     -- 'admin' | 'member'
+    CHECK (role IN ('admin','member')),
+  joined_at  TIMESTAMP WITH TIME ZONE DEFAULT now(),
+  PRIMARY KEY (team_id, user_id)
+);
+
+### Tasks
+CREATE TABLE public.tasks (
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  title         TEXT NOT NULL,                    -- Short title (e.g. 'Fix bug #123')
+  description   TEXT,                             -- Detailed description
+  status        TEXT NOT NULL                     -- 'todo' | 'in_progress' | 'done'
+    CHECK (status IN ('todo','in_progress','done')),
+  assignee_id   UUID REFERENCES public.users(id), -- Assigned user
+  created_by    UUID REFERENCES public.users(id) NOT NULL,
+  created_at    TIMESTAMP WITH TIME ZONE DEFAULT now(),
+  updated_at    TIMESTAMP WITH TIME ZONE
+);
+
+### Messages
+CREATE TABLE public.messages (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  team_id     UUID REFERENCES public.teams(id) NOT NULL,
+  user_id     UUID REFERENCES public.users(id) NOT NULL,
+  content     TEXT NOT NULL,                       -- The chat message text
+  created_at  TIMESTAMP WITH TIME ZONE DEFAULT now()
+);
+
+## Row-Level Security (RLS) Policies
+Enable RLS and define strict access rules:
+-- Enable RLS on tables
+ALTER TABLE public.tasks   ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.messages ENABLE ROW LEVEL SECURITY;
+
+-- tasks: allow only creator or assignee
+CREATE POLICY "tasks_access" ON public.tasks
+  FOR ALL
+  USING (
+    auth.uid() = created_by OR auth.uid() = assignee_id
+  );
+
+-- messages: allow only team members
+CREATE POLICY "messages_access" ON public.messages
+  FOR ALL
+  USING (
+    EXISTS (
+      SELECT 1
+        FROM public.team_members tm
+       WHERE tm.team_id = messages.team_id
+         AND tm.user_id = auth.uid()
+    )
+  );
+
+
+## System Architecture
+flowchart LR
+  subgraph Frontend
+    A[React + TypeScript + Tailwind]
+  end
+  subgraph Supabase
+    B[Auth (Email + Google OAuth)]
+    C[PostgreSQL DB]
+    D[Realtime WebSocket]
+  end
+  A -- HTTPS (JWT) --> B
+  A -- supabase-js --> C
+  A -- supabase-js WS --> D
+  C -- NOTIFY --> D
+  D -- WS --> A
+
+
+## Authentication Flow
+
+* Email/Password or Google OAuth via Supabase Auth.
+
+* Supabase issues a JWT, stored securely on the client (e.g., httpOnly cookie or localStorage).
+
+* All subsequent API calls include the JWT for auth and RLS enforcement.
+
+## CRUD & Realtime Flow
+
+* Task CRUD: Use supabase.from('tasks').select().eq('assignee_id', user.id) for reads. Use .insert(), .update(), .delete() for mutations.
+
+* Chat Subscriptions: Create a realtime channel:
+
+supabase
+  .channel('public:messages')
+  .on('postgres_changes', {
+    event: 'INSERT', schema: 'public', table: 'messages',
+    filter: `team_id=eq.${currentTeamId}`
+  }, ({ new: msg }) => {
+    appendMessage(msg);
+  })
+  .subscribe();
+
+* Sending a Message:
+await supabase
+  .from('messages')
+  .insert([{ team_id: currentTeamId, user_id: user.id, content: text }]);
+
+
+# Directory & Component Structure
+Organize code by feature, with clear separation of concerns
+/src
+├── components
+│   ├── auth
+│   │   ├── LoginButton.tsx     # Google OAuth & email login
+│   │   └── ProtectedRoute.tsx  # Route guarding
+│   ├── chat
+│   │   ├── ChatWindow.tsx      # Lists messages, input form
+│   │   └── MessageItem.tsx     # Single message entry
+│   ├── layout
+│   │   ├── Sidebar.tsx         # Teams list + navigation
+│   │   └── Header.tsx          # User avatar, logout
+│   └── tasks
+│       ├── TaskList.tsx        # Display list of tasks
+│       ├── TaskItem.tsx        # Single task card
+│       └── TaskForm.tsx        # Create/update form
+├── hooks
+│   ├── useAuth.ts              # Auth state and helpers
+│   ├── useTasks.ts             # Task CRUD + subscriptions
+│   └── useMessages.ts          # Chat subscriptions + send
+├── lib
+│   └── supabaseClient.ts       # Initialize createClient()
+├── pages                      # Next.js page routes (if used)
+│   ├── index.tsx               # Dashboard overview
+│   └── team/[id].tsx           # Team-specific view
+└── styles
+    └── tailwind.css            # Tailwind base + custom utilities
+
+
+## OAuth & Supabase Configuration
+
+```bash
+# Enable Google OAuth provider in Supabase
+# Dashboard ▶ Auth ▶ Providers ▶ Enable Google
+
+# Configure Redirect URIs
+# Development:
+http://localhost:3000
+# Production:
+https://yourapp.com
+
+# Set environment variables in .env.local
+export NEXT_PUBLIC_SUPABASE_URL="https://xyz.supabase.co"
+export NEXT_PUBLIC_SUPABASE_ANON_KEY="your-anon-key"
+
+# Initialize Supabase client (lib/supabaseClient.ts)
+import { createClient } from '@supabase/supabase-js';
+
+export const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+);
+
+# LoginButton component for Google OAuth
+export function LoginButton() {
+  const handleGoogleLogin = () => {
+    supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: { redirectTo: window.location.origin }
+    });
+  };
+  return <button onClick={handleGoogleLogin}>Sign in with Google</button>;
+}
+
+# COding Conventions & Cursor Rules
+# TypeScript strict mode
+# tsconfig.json: "strict": true
+
+# React guidelines
+# - Use functional components and React hooks
+# - Group by feature: components/, hooks/, pages/
+
+# Styling
+# - Use Tailwind CSS utility classes
+# - No inline styles
+
+# Environment variables
+# - Always reference via process.env
+# - Do not hardcode secrets
+
+# UX requirements
+# - Show loading and error states for every async call
+
+# Testing
+# - Write Jest + React Testing Library tests for each component and hook
+
+# Cursor directives:
+# - Scaffold prop and return type definitions
+# - Stub API request/response interfaces
+# - Add comments above complex logic blocks
+
+
+Deployment & Environment COnfiguration
+# Hosting
+# - Deploy frontend to Vercel or Netlify
+
+# GitHub Actions CI/CD workflow
+on: [push]
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: pnpm/action-setup@v2
+      - run: pnpm install && pnpm run build
+      - uses: amondnet/vercel-action@v20
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
+          working-directory: ./
+
+```
+For deployment, Make sure to ask me before doing anything about it. 
+I need to create all the secrets beforehand.
+
+globs:
+alwaysApply: false
+---
